@@ -1,0 +1,166 @@
+<html>
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/webmidi"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11/dist/vue.min.js"></script>
+    <style>
+      .pressed-note {
+        padding: 20px;
+        border: 1px solid black;
+        margin: 15px;
+        font-size: 20px;
+        width: auto;
+        display: inline-flex;
+      }
+      .click-me-btn{
+        height: 100%;
+        width: 100%;
+        font-size: 40px;
+        font-weight: bold;
+        background-color: white;
+        border: 5px solid red;
+      }
+    </style>
+</head>
+
+<body>
+  <div id="app">
+    <button 
+      type="button"
+      @click="showButton = false"
+      v-if="showButton"
+      class="click-me-btn"
+    >Accept Request (Top Left)<br />And Click Me For Sound</button>
+    <div class="pressed-note" v-for="note in pressedNotes">
+      <ul>
+        <li v-for="(value, key) in note">
+          <b style="text-transform: capitalize;">{{ key }}:</b> {{ value }}
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    var app = new Vue({
+      el: '#app',
+      data: {
+        play: [],
+        pressedNotes: [],
+        playAlong: false,
+        showButton: true
+      },
+      methods: {
+        playSound(output, id) {
+          const url = 'sounds/' + id.toString()[0] + '/' + id.toString()[1] + '.mp3'
+          var a = new Audio(url);
+          output.sendSysex([0, 32, 41], [2, 13, 7]);
+          a.play().catch(e => {
+            if(e.toString().includes('source')) {
+              output.sendSysex(
+                [0, 32, 41], 
+                [2, 13, 7, 0, 10, 0, 5, ...`${id}`.split('').map((a) => { return a.charCodeAt(0); })]
+              );
+            } else {
+              output.sendSysex(
+                [0, 32, 41], 
+                [2, 13, 7, 0, 10, 0, 5, ...':-('.split('').map((a) => { return a.charCodeAt(0); })]
+              );
+            }
+          });
+
+          return a
+        }
+      },
+      mounted() {
+        WebMidi.enable((err) => {
+          if (err) {
+              console.log("WebMidi could not be enabled.", err);
+          }
+
+          const input = WebMidi.getInputByName("Launchpad Mini MK3 MIDI 2");
+          const output = WebMidi.getOutputByName("Launchpad Mini MK3 MIDI 2");
+
+          // Set Launchpad into programmer mode
+          output.sendSysex([0, 32, 41], [2, 13, 14, 1]);
+
+          // Reset playAlong LED (92 = MIDI Note) (21 = Green, 0 = Off)
+          output.sendSysex([0, 32, 41], [2, 13, 3, 0, 92, (this.playAlong ? 21 : 0)]);
+
+          // Stop text scrolling
+          // output.sendSysex([0, 32, 41], [2, 13, 7]);
+
+          // Connected Text Scroll
+          output.sendSysex(
+            [0, 32, 41], 
+            [2, 13, 7, 0, 10, 0, 21, ...':-)'.split('').map((a) => { return a.charCodeAt(0); })]
+          );
+          
+
+          input.addListener('controlchange', "all",
+            (e) => {
+              if(e.controller.number === 92) { // [\/] Button
+                if(e.value === 127) { // pressed state
+                  this.playAlong = !this.playAlong
+
+                  // Set playAlong LED on or off
+                  output.sendSysex([0, 32, 41], [2, 13, 3, 0, 92, (this.playAlong ? 21 : 0)]);
+                }
+              }
+
+              if(e.controller.number === 19) { // [Stop/Solo/Mute] Button
+                if(e.value === 127) { // pressed state
+                  this.play.map((audio) => { audio.pause() })
+                  // Turn LED red
+                  output.sendSysex([0, 32, 41], [2, 13, 3, 0, 19, 5]);
+                } else {
+                  // Turn LED off
+                  output.sendSysex([0, 32, 41], [2, 13, 3, 0, 19, 0]);
+                }
+              }
+
+              console.log("[ControlChange]", e);
+            }
+          );
+
+          input.addListener('noteoff', "all",
+            (e) => {
+              console.log('Note [OFF]', e)
+
+              this.pressedNotes = this.pressedNotes.filter((note) => { return note.number !== e.note.number })
+
+              if(!this.playAlong) {
+                this.play[e.note.number].pause() // Stop playback of Audio
+                delete this.play[e.note.number]
+                output.playNote(e.note.name + e.note.octave, 1, { duration: 0 }) // Turn off LED
+              }
+            }
+          );
+
+          input.addListener('noteon', "all",
+            (e) => {
+              console.log('Note [ON]', e)
+              var sound = this.playSound(output, e.note.number)
+
+
+              this.pressedNotes.push(e.note)
+              this.play[e.note.number] = sound
+              
+              sound.onloadedmetadata = () => {
+                // Light up the button for the duration of the button press or audio file
+                output.playNote(
+                  e.note.name + e.note.octave,
+                  1,
+                  {
+                    duration: this.playAlong ? sound.duration * 1000 : undefined, 
+                    velocity: Math.floor(Math.random() * 127) + 1,
+                    rawVelocity: true
+                  }
+                );
+              };
+            }
+          );
+        }, true);
+      }
+    })
+  </script>
+</body>
+</html>
