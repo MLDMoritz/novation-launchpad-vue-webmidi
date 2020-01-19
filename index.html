@@ -30,6 +30,7 @@
       v-if="showButton"
       class="click-me-btn"
     >Accept Request (Top Left)<br />And Click Me For Sound</button>
+
     <div class="pressed-note" v-for="note in pressedNotes">
       <ul>
         <li v-for="(value, key) in note">
@@ -46,12 +47,13 @@
         play: [],
         pressedNotes: [],
         playAlong: false,
-        showButton: true
+        showButton: true,
+        stopButtonPressed: false
       },
       methods: {
         playSound(output, id) {
           const url = 'sounds/' + id.toString()[0] + '/' + id.toString()[1] + '.mp3'
-          var a = new Audio(url);
+          const a = new Audio(url);
           output.sendSysex([0, 32, 41], [2, 13, 7]);
           a.play().catch(e => {
             if(e.toString().includes('source')) {
@@ -102,19 +104,14 @@
                   this.playAlong = !this.playAlong
 
                   // Set playAlong LED on or off
-                  output.sendSysex([0, 32, 41], [2, 13, 3, 0, 92, (this.playAlong ? 21 : 0)]);
+                  output.sendSysex([0, 32, 41], [2, 13, 3, 0, 92, this.playAlong ? 21 : 0]);
                 }
               }
 
               if(e.controller.number === 19) { // [Stop/Solo/Mute] Button
-                if(e.value === 127) { // pressed state
-                  this.play.map((audio) => { audio.pause() })
-                  // Turn LED red
-                  output.sendSysex([0, 32, 41], [2, 13, 3, 0, 19, 5]);
-                } else {
-                  // Turn LED off
-                  output.sendSysex([0, 32, 41], [2, 13, 3, 0, 19, 0]);
-                }
+                this.stopButtonPressed = e.value === 127
+                // Turn LED red or off
+                output.sendSysex([0, 32, 41], [2, 13, 3, 0, 19, this.stopButtonPressed ? 5 : 0]);
               }
 
               console.log("[ControlChange]", e);
@@ -138,24 +135,27 @@
           input.addListener('noteon', "all",
             (e) => {
               console.log('Note [ON]', e)
-              var sound = this.playSound(output, e.note.number)
 
-
-              this.pressedNotes.push(e.note)
-              this.play[e.note.number] = sound
-              
-              sound.onloadedmetadata = () => {
-                // Light up the button for the duration of the button press or audio file
-                output.playNote(
-                  e.note.name + e.note.octave,
-                  1,
-                  {
-                    duration: this.playAlong ? sound.duration * 1000 : undefined, 
-                    velocity: Math.floor(Math.random() * 127) + 1,
-                    rawVelocity: true
-                  }
-                );
-              };
+              if(this.stopButtonPressed) {
+                this.play[e.note.number].pause()
+                delete this.play[e.note.number]
+                output.playNote(e.note.name + e.note.octave, 1, { duration: 0 }) // Turn off LED
+              } else {
+                var sound = this.playSound(output, e.note.number)
+                this.pressedNotes.push(e.note)
+                this.play[e.note.number] = sound
+                
+                sound.onloadedmetadata = () => {
+                  // Light up the button for the duration of the button press or audio file
+                  output.playNote(e.note.name + e.note.octave, 1,
+                    {
+                      duration: this.playAlong ? sound.duration * 1000 : undefined, 
+                      velocity: Math.floor(Math.random() * 127) + 1,
+                      rawVelocity: true
+                    }
+                  );
+                };
+              }
             }
           );
         }, true);
